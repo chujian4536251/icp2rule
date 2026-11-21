@@ -6,9 +6,15 @@ OUTPUT_DIR = Path(__file__).parent / "domain_set"
 TRACK_DIR = Path(__file__).parent / "track"
 SURGE_DIR = TRACK_DIR / "surge"
 SURGE_SUFFIX = ".list"
+INLINE_RULESET_PATH = TRACK_DIR / "surge_ruleset_inline.conf"
+RULESET_ORDER = ("PCDN", "CNAD", "CN", "Other")
 DOMAIN_SET_PREFIX = (
-    r"https://raw.giteeusercontent.com/sredtfyguhijoikm/icp2rule/"
-    r"raw/master/domain_set"
+    "https://raw.githubusercontent.com/chujian4536251/icp2rule/"
+    "refs/heads/master/domain_set"
+)
+INLINE_DOMAIN_SET_PREFIX = (
+    r"https\://raw\.githubusercontent\.com/chujian4536251/icp2rule/"
+    r"refs/heads/master/domain_set"
 )
 
 
@@ -98,19 +104,23 @@ def parse_track_line(line: str) -> tuple[str, str] | None:
     return parts[0], parts[1]
 
 
-def build_domain_set_rule(label: str, domain_set_name: str) -> str:
+def build_domain_set_rule(
+    label: str,
+    domain_set_name: str,
+    url_prefix: str = DOMAIN_SET_PREFIX,
+) -> str:
     name = domain_set_name.strip()
     if name.endswith(".list"):
         name = name.removesuffix(".list")
 
-    rule = f"DOMAIN-SET,{DOMAIN_SET_PREFIX}/{name}.list"
+    rule = f"DOMAIN-SET,{url_prefix}/{name}.list"
     if label:
         rule += f"    // {label}"
     return rule
 
 
-def process_track_file(filepath: Path) -> None:
-    rules: list[str] = []
+def read_track_file(filepath: Path) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
     with open(filepath, "r", encoding="utf-8-sig") as f:
         for line_number, line in enumerate(f, start=1):
             parsed = parse_track_line(line)
@@ -122,12 +132,34 @@ def process_track_file(filepath: Path) -> None:
                 raise ValueError(
                     f"Missing domain set name in {filepath.name}:{line_number}"
                 )
-            rules.append(build_domain_set_rule(label, domain_set_name))
+            entries.append((label, domain_set_name))
+
+    return entries
+
+
+def process_track_file(filepath: Path) -> list[tuple[str, str]]:
+    entries = read_track_file(filepath)
+    rules = [build_domain_set_rule(label, name) for label, name in entries]
 
     output_path = SURGE_DIR / f"{filepath.stem}{SURGE_SUFFIX}"
     with open(output_path, "w", encoding="utf-8") as f:
         f.writelines(f"{rule}\n" for rule in rules)
     print(f"  [OK] {output_path.name} ({len(rules)} rules)")
+    return entries
+
+
+def build_inline_rule_set(
+    track_entries: list[tuple[str, list[tuple[str, str]]]],
+) -> str:
+    sections: list[str] = []
+    for section_name, entries in track_entries:
+        lines = [f"[Ruleset {section_name}]"]
+        lines.extend(
+            build_domain_set_rule(label, name, INLINE_DOMAIN_SET_PREFIX)
+            for label, name in entries
+        )
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections) + "\n"
 
 
 def process_track_files() -> None:
@@ -138,9 +170,28 @@ def process_track_files() -> None:
         print("No .md files found in track/")
         return
 
+    md_files.sort(
+        key=lambda fp: (
+            RULESET_ORDER.index(fp.stem)
+            if fp.stem in RULESET_ORDER
+            else len(RULESET_ORDER),
+            fp.stem,
+        )
+    )
+
     print(f"Processing {len(md_files)} track file(s)...")
+    track_entries: list[tuple[str, list[tuple[str, str]]]] = []
     for fp in md_files:
-        process_track_file(fp)
+        entries = process_track_file(fp)
+        track_entries.append((fp.stem, entries))
+
+    INLINE_RULESET_PATH.write_text(
+        build_inline_rule_set(track_entries), encoding="utf-8"
+    )
+    print(
+        f"  [OK] {INLINE_RULESET_PATH.name} "
+        f"({len(track_entries)} rule sets)"
+    )
 
 
 def main() -> None:
